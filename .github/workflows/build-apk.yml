@@ -1,0 +1,141 @@
+name: Build GradelVPN APK
+
+# Собирается автоматически при каждом пуше в main — то есть тебе не нужен
+# компьютер: всё, что нужно, это залить файлы проекта в GitHub-репозиторий
+# (можно прямо с телефона, см. README раздел "Сборка APK с телефона").
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      # У нас в репозитории только pubspec.yaml + lib/ (без папки android/).
+      # "flutter create ." безопасно достраивает недостающие платформенные
+      # файлы, не трогая существующие lib/ и pubspec.yaml.
+      - name: Scaffold Android platform files
+        run: flutter create . --platforms=android --project-name=gradelvpn --org=com.gradelvpn
+
+      - name: Add required permissions to AndroidManifest.xml
+        run: |
+          python3 - <<'EOF'
+          import re
+          path = "android/app/src/main/AndroidManifest.xml"
+          with open(path) as f:
+              content = f.read()
+          perms = (
+              '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n'
+              '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />\n'
+              '    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n'
+              '    <uses-permission android:name="android.permission.BIND_QUICK_SETTINGS_TILE" />\n'
+          )
+          if "FOREGROUND_SERVICE_DATA_SYNC" not in content:
+              content = content.replace("<application", perms + "\n    <application", 1)
+
+          # Без <queries> Android 11+ (API 30+) прячет от приложения все
+          # установленные пакеты — canLaunchUrl()/launchUrl() из url_launcher
+          # тихо не находит, чем открыть https-ссылку, и настройки "Бот
+          # подписки" / "Канал GradelVPN" просто ничего не делают по нажатию.
+          if "<queries>" not in content:
+              queries = (
+                  '    <queries>\n'
+                  '        <intent>\n'
+                  '            <action android:name="android.intent.action.VIEW" />\n'
+                  '            <category android:name="android.intent.category.BROWSABLE" />\n'
+                  '            <data android:scheme="https" />\n'
+                  '        </intent>\n'
+                  '    </queries>\n'
+              )
+              content = content.replace("</manifest>", queries + "</manifest>")
+
+          # Регистрируем плитку "лучший сервер" в шторке уведомлений.
+          if "QuickConnectTileService" not in content:
+              tile_service = (
+                  '        <service android:name=".QuickConnectTileService"\n'
+                  '            android:label="GradelVPN"\n'
+                  '            android:icon="@mipmap/ic_launcher"\n'
+                  '            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"\n'
+                  '            android:exported="true">\n'
+                  '            <intent-filter>\n'
+                  '                <action android:name="android.service.quicksettings.action.QS_TILE" />\n'
+                  '            </intent-filter>\n'
+                  '        </service>\n'
+              )
+              content = content.replace("</application>", tile_service + "    </application>")
+
+          with open(path, "w") as f:
+              f.write(content)
+          EOF
+
+      - name: Copy native Android overlay (quick-settings tile + MainActivity bridge)
+        run: |
+          cp android-overlay/app/src/main/kotlin/com/gradelvpn/gradelvpn/MainActivity.kt \
+             android/app/src/main/kotlin/com/gradelvpn/gradelvpn/MainActivity.kt
+          cp android-overlay/app/src/main/kotlin/com/gradelvpn/gradelvpn/QuickConnectTileService.kt \
+             android/app/src/main/kotlin/com/gradelvpn/gradelvpn/QuickConnectTileService.kt
+
+      - name: Set minSdkVersion to 21+
+        run: |
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 21/' android/app/build.gradle || true
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 21/' android/app/build.gradle.kts || true
+
+      - name: Bump Kotlin Gradle plugin version
+        run: |
+          sed -i 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.0.0"/' android/settings.gradle || true
+          sed -i "s/id(\"org.jetbrains.kotlin.android\") version \"[^\"]*\"/id(\"org.jetbrains.kotlin.android\") version \"2.0.0\"/" android/settings.gradle.kts || true
+          sed -i 's/id "com.android.application" version "[^"]*"/id "com.android.application" version "8.3.0"/' android/settings.gradle || true
+          sed -i "s/id(\"com.android.application\") version \"[^\"]*\"/id(\"com.android.application\") version \"8.3.0\"/" android/settings.gradle.kts || true
+
+      - name: Bump Gradle wrapper version
+        run: |
+          sed -i 's#distributionUrl=.*#distributionUrl=https\\://services.gradle.org/distributions/gradle-8.6-all.zip#' android/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Set required NDK version
+        run: |
+          sed -i 's/ndkVersion = flutter.ndkVersion/ndkVersion = "25.1.8937393"/' android/app/build.gradle.kts || true
+          sed -i 's/ndkVersion flutter.ndkVersion/ndkVersion "25.1.8937393"/' android/app/build.gradle || true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate app icons
+        run: |
+          echo "--- flutter_launcher_icons config ---"
+          grep -A8 "flutter_launcher_icons:" pubspec.yaml || echo "КОНФИГ НЕ НАЙДЕН В pubspec.yaml!"
+          echo "--- запуск генерации ---"
+          dart run flutter_launcher_icons
+          echo "--- результат (должны быть свежие timestamp/размер) ---"
+          ls -la android/app/src/main/res/mipmap-xxhdpi/ || true
+          file android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png || true
+
+      # "flutter create" сам кладёт adaptive-иконку в mipmap-anydpi-v26/ic_launcher.xml,
+      # которая на Android 8+ приоритетнее обычных PNG с тем же именем — а она всё
+      # ещё ссылается на дефолтный вектор-логотип Flutter (ic_launcher_foreground.xml),
+      # а не на нашу картинку. flutter_launcher_icons её не трогает (мы не указали
+      # adaptive_icon_background/foreground), поэтому именно она и продолжала
+      # побеждать везде, включая иконку в уведомлении, сколько ни перегенерируй PNG.
+      - name: Remove stale default adaptive icon
+        run: |
+          rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          rm -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+          rm -f android/app/src/main/res/drawable*/ic_launcher_foreground.xml
+          rm -f android/app/src/main/res/values/ic_launcher_background.xml
+          ls -la android/app/src/main/res/mipmap-anydpi-v26/ 2>/dev/null || echo "папка пуста/удалена — это ожидаемо"
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: GradelVPN-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
