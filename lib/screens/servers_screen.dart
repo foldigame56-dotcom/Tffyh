@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_v2ray/flutter_v2ray.dart';
+import 'package:flutter_v2ray_client/flutter_v2ray.dart';
 import 'package:provider/provider.dart';
 import '../services/server_store.dart';
 import '../services/ping_store.dart';
@@ -20,7 +20,7 @@ class ServersScreen extends StatelessWidget {
 
   String _remarkFor(String link) {
     try {
-      final parsed = FlutterV2ray.parseFromURL(link);
+      final parsed = V2ray.parseFromURL(link);
       return parsed.remark.isNotEmpty ? parsed.remark : link;
     } catch (_) {
       return link;
