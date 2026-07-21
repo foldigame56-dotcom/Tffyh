@@ -1,22 +1,30 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter_v2ray/flutter_v2ray.dart';
+import 'package:flutter_v2ray_client/flutter_v2ray.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'settings_store.dart';
 
-/// Обёртка над flutter_v2ray, которая держит состояние подключения
+/// Обёртка над flutter_v2ray_client, которая держит состояние подключения
 /// и уведомляет UI через ChangeNotifier.
+///
+/// Раньше здесь использовался пакет `flutter_v2ray` (blueboy-tm) — в нём
+/// кастомная иконка уведомления (notificationIconResourceName) фактически
+/// не работала независимо от того, что ей передать: сколько ни меняй имя
+/// ресурса в pubspec.yaml, в шторке всё равно оставался дефолтный логотип
+/// Flutter. `flutter_v2ray_client` — активно поддерживаемый форк того же
+/// плагина (тот же API, тот же Xray-core под капотом), где этот же самый
+/// параметр отдельно указан в их фичах как рабочий/починенный.
 ///
 /// Проверка пинга серверов теперь живёт отдельно в PingStore (быстрый
 /// TCP-пинг) — этот класс отвечает только за само VPN-соединение.
 class V2RayService extends ChangeNotifier {
-  late final FlutterV2ray _v2ray;
+  late final V2ray _v2ray;
   bool _initialized = false;
 
   V2RayStatus status = V2RayStatus();
   String? connectedRemark;
 
   V2RayService() {
-    _v2ray = FlutterV2ray(
+    _v2ray = V2ray(
       onStatusChanged: (s) {
         status = s;
         notifyListeners();
@@ -26,12 +34,7 @@ class V2RayService extends ChangeNotifier {
 
   Future<void> init() async {
     if (_initialized) return;
-    // По умолчанию плагин ищет иконку для уведомления по имени
-    // mipmap/ic_launcher — но flutter_launcher_icons в этом проекте
-    // настроен генерировать иконку под именем launcher_icon (см.
-    // pubspec.yaml), поэтому ic_launcher так и остаётся дефолтным
-    // логотипом Flutter, который плагин и показывал в уведомлении.
-    await _v2ray.initializeV2Ray(
+    await _v2ray.initialize(
       notificationIconResourceType: 'mipmap',
       notificationIconResourceName: 'ic_launcher',
     );
@@ -55,7 +58,7 @@ class V2RayService extends ChangeNotifier {
   }
 
   Future<void> connect(String shareLink, {SettingsStore? settings}) async {
-    final parsed = FlutterV2ray.parseFromURL(shareLink);
+    final parsed = V2ray.parseFromURL(shareLink);
     connectedRemark = parsed.remark.isNotEmpty ? parsed.remark : 'VPN';
     await _v2ray.startV2Ray(
       remark: connectedRemark!,
