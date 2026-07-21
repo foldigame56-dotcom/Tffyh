@@ -113,9 +113,31 @@ jobs:
           grep -A8 "flutter_launcher_icons:" pubspec.yaml || echo "КОНФИГ НЕ НАЙДЕН В pubspec.yaml!"
           echo "--- запуск генерации ---"
           dart run flutter_launcher_icons
-          echo "--- результат (должны быть свежие timestamp/размер) ---"
-          ls -la android/app/src/main/res/mipmap-xxhdpi/ || true
-          file android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png || true
+          echo "--- результат по ВСЕМ плотностям (раньше проверяли только xxhdpi — а ---"
+          echo "--- уведомление на некоторых прошивках берёт иконку из mdpi/hdpi) ---"
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            f="android/app/src/main/res/mipmap-$d/ic_launcher.png"
+            echo "== mipmap-$d =="
+            file "$f" || echo "ОТСУТСТВУЕТ: $f"
+          done
+
+      # Подстраховка: если flutter_launcher_icons почему-то не тронул одну из
+      # плотностей (а раньше мы это никак не проверяли, только xxhdpi) — там
+      # остаётся нетронутый дефолтный ic_launcher.png от "flutter create", и
+      # система может брать иконку для уведомления именно из этой плотности,
+      # а не из той, что видно на рабочем столе. Принудительно копируем
+      # наш реальный сгенерированный файл во ВСЕ плотности без исключений.
+      - name: Force our icon into every density bucket
+        run: |
+          SRC="android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png"
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            mkdir -p "android/app/src/main/res/mipmap-$d"
+            cp "$SRC" "android/app/src/main/res/mipmap-$d/ic_launcher.png"
+          done
+          echo "--- после принудительной подмены ---"
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            file "android/app/src/main/res/mipmap-$d/ic_launcher.png"
+          done
 
       # "flutter create" сам кладёт adaptive-иконку в mipmap-anydpi-v26/ic_launcher.xml,
       # которая на Android 8+ приоритетнее обычных PNG с тем же именем — а она всё
